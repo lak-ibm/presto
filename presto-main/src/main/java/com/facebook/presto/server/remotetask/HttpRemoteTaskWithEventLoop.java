@@ -69,6 +69,7 @@ import com.google.common.base.Ticker;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.ObjectArrays;
 import com.google.common.collect.SetMultimap;
@@ -185,7 +186,7 @@ public final class HttpRemoteTaskWithEventLoop
     private long currentRequestStartNanos;
     private long currentRequestLastTaskUpdate;
 
-    private final SetMultimap<PlanNodeId, ScheduledSplit> pendingSplits = HashMultimap.create();
+    private final SetMultimap<PlanNodeId, ScheduledSplit> pendingSplits = LinkedHashMultimap.create();
     private final AtomicInteger pendingSourceSplitCount = new AtomicInteger();
     private final AtomicLong pendingSourceSplitsWeight = new AtomicLong();
     private final SetMultimap<PlanNodeId, Lifespan> pendingNoMoreSplitsForLifespan = HashMultimap.create();
