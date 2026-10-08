@@ -18,6 +18,7 @@ import com.facebook.airlift.units.Duration;
 import com.facebook.presto.Session;
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.dispatcher.NoOpQueryManager;
+import com.facebook.presto.execution.scheduler.FixedBucketNodeMap;
 import com.facebook.presto.execution.scheduler.LegacyNetworkTopology;
 import com.facebook.presto.execution.scheduler.ModularHashingNodeProvider;
 import com.facebook.presto.execution.scheduler.NetworkLocation;
@@ -86,6 +87,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
@@ -560,6 +562,51 @@ public class TestNodeScheduler
     @Test
     public void testAssignmentPreservesSplitOrder()
     {
+        assertAssignmentPreservesSplitOrder(splits -> nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values())).getAssignments());
+    }
+
+    @Test
+    public void testTopologyAwareAssignmentPreservesSplitOrder()
+    {
+        TestNetworkTopology topology = new TestNetworkTopology();
+        NodeScheduler topologyAwareNodeScheduler = new NodeScheduler(
+                new NetworkLocationCache(topology),
+                topology,
+                nodeManager,
+                new NodeSelectionStats(),
+                new NodeSchedulerConfig()
+                        .setMaxSplitsPerNode(20)
+                        .setIncludeCoordinator(false)
+                        .setNetworkTopology("test")
+                        .setMaxPendingSplitsPerTask(10),
+                nodeTaskMap,
+                new Duration(0, SECONDS),
+                new ThrowingNodeTtlFetcherManager(),
+                new NoOpQueryManager(),
+                new SimpleTtlNodeSelectorConfig());
+
+        try {
+            NodeSelector topologyAwareNodeSelector = topologyAwareNodeScheduler.createNodeSelector(session, CONNECTOR_ID);
+            assertAssignmentPreservesSplitOrder(splits -> topologyAwareNodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values())).getAssignments());
+        }
+        finally {
+            topologyAwareNodeScheduler.stop();
+        }
+    }
+
+    @Test
+    public void testBucketedAssignmentPreservesSplitOrder()
+    {
+        InternalNode assignedNode = nodeManager.getActiveConnectorNodes(CONNECTOR_ID).stream()
+                .filter(node -> node.getHostAndPort().equals(HostAddress.fromString("127.0.0.1:11")))
+                .collect(onlyElement());
+        FixedBucketNodeMap bucketNodeMap = new FixedBucketNodeMap(split -> 0, ImmutableList.of(assignedNode), false);
+
+        assertAssignmentPreservesSplitOrder(splits -> nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), bucketNodeMap).getAssignments());
+    }
+
+    private static void assertAssignmentPreservesSplitOrder(Function<Set<Split>, Multimap<InternalNode, Split>> computeAssignments)
+    {
         TestingTransactionHandle transactionHandle = new TestingTransactionHandle(new UUID(0, 0));
         List<ConnectorSplit> expectedOrder = new ArrayList<>();
         Set<Split> splits = new LinkedHashSet<>();
@@ -571,7 +618,7 @@ public class TestNodeScheduler
             splits.add(new Split(CONNECTOR_ID, transactionHandle, connectorSplit));
         }
 
-        Multimap<InternalNode, Split> assignments = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values())).getAssignments();
+        Multimap<InternalNode, Split> assignments = computeAssignments.apply(splits);
         InternalNode assignedNode = assignments.keySet().stream().collect(onlyElement());
         List<ConnectorSplit> actualOrder = new ArrayList<>();
         for (Split split : assignments.get(assignedNode)) {
